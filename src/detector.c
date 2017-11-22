@@ -152,7 +152,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 
         i = get_current_batch(net);
         printf("%d: %f, %f avg, %f rate, %lf seconds, %d images\n", get_current_batch(net), loss, avg_loss, get_current_rate(net), sec(clock()-time), i*imgs);
-		if (i % 1000 == 0 || (i < 1000 && i % 100 == 0)) {
+		//save weights every 2000 iterations
+		if (i % 2000 == 0) {
 #ifdef GPU
 			if (ngpus != 1) sync_nets(nets, ngpus, 0);
 #endif
@@ -375,6 +376,11 @@ void validate_detector(char *datacfg, char *cfgfile, char *weightfile)
 
 void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
 {
+	list *options = read_data_cfg(datacfg);
+	char *name_list = option_find_str(options, "names", "data/names.list");
+	char **names = get_labels(name_list);
+	image **alphabet = load_alphabet();
+
     network net = parse_network_cfg_custom(cfgfile, 1);
     if(weightfile){
         load_weights(&net, weightfile);
@@ -383,7 +389,7 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
     fprintf(stderr, "Learning Rate: %g, Momentum: %g, Decay: %g\n", net.learning_rate, net.momentum, net.decay);
     srand(time(0));
 
-	list *options = read_data_cfg(datacfg);
+	//list *options = read_data_cfg(datacfg);
 	char *valid_images = option_find_str(options, "valid", "data/train.txt");
     list *plist = get_paths(valid_images);
     char **paths = (char **)list_to_array(plist);
@@ -407,11 +413,13 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
     int correct = 0;
     int proposals = 0;
     float avg_iou = 0;
+	int TP = 0, FP = 0;
 
     for(i = 0; i < m; ++i){
         char *path = paths[i];
         image orig = load_image_color(path, 0, 0);
         image sized = resize_image(orig, net.w, net.h);
+
         char *id = basecfg(path);
         network_predict(net, sized.data);
         get_region_boxes(l, 1, 1, thresh, probs, boxes, 1, 0);
@@ -422,7 +430,7 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
         find_replace(labelpath, "JPEGImages", "labels", labelpath);
         find_replace(labelpath, ".jpg", ".txt", labelpath);
         find_replace(labelpath, ".JPEG", ".txt", labelpath);
-	find_replace(labelpath, ".png", ".txt", labelpath);
+		find_replace(labelpath, ".png", ".txt", labelpath);
 
         int num_labels = 0;
         box_label *truth = read_boxes(labelpath, &num_labels);
@@ -434,7 +442,21 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
 		for (j = 0; j < num_labels; ++j) {
 			++total;
 			box t = { truth[j].x, truth[j].y, truth[j].w, truth[j].h };
+			//draw GroundTruth boxes
+			int left = (t.x - t.w / 2.)*orig.w;
+			int right = (t.x + t.w / 2.)*orig.w;
+			int top = (t.y - t.h / 2.)*orig.h;
+			int bot = (t.y + t.h / 2.)*orig.h;
+
+			if (left < 0) left = 0;
+			if (right > orig.w - 1) right = orig.w - 1;
+			if (top < 0) top = 0;
+			if (bot > orig.h - 1) bot = orig.h - 1;
+			int width = orig.h * .012;
+			//draw_box_width(orig, left, top, right, bot, 2, 255, 255, 255);
+
 			float best_iou = 0;
+
 			for (k = 0; k < l.w*l.h*l.n; ++k) {
 				float iou = box_iou(boxes[k], t);
 				if (probs[k][0] > thresh && iou > best_iou) {
@@ -443,11 +465,15 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
 			}
             avg_iou += best_iou;
             if(best_iou > iou_thresh){
-                ++correct;
+                ++TP;
             }
         }
-
-        fprintf(stderr, "%5d %5d %5d\tRPs/Img: %.2f\tIOU: %.2f%%\tRecall:%.2f%%\n", i, correct, total, (float)proposals/(i+1), avg_iou*100/total, 100.*correct/total);
+		//draw_detections(orig, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes);
+		/*if (num_labels > 0) {
+			show_image(orig, "resized");
+		}*/
+		FP = proposals - TP;
+        fprintf(stderr, "%5d %5d %5d\tRPs/Img: %.2f\tIOU: %.2f%%\tRecall:%.2f%%\tPrecision:%.2f%%\n", i, TP, total, (float)proposals/(i+1), avg_iou*100/total, 100.*TP / total, 100.*TP / (TP + FP));
         free(id);
         free_image(orig);
         free_image(sized);
@@ -470,6 +496,8 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     clock_t time;
     char buff[256];
     char *input = buff;
+	//output for detected boxes
+	char *output;
     int j;
     float nms=.4;
     while(1){
@@ -493,12 +521,18 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
 
         float *X = sized.data;
         time=clock();
+		int a = strlen(input);
+		output = input;
+		output[a - 3] = 't';
+		output[a - 2] = 'x';
+		output[a - 1] = 't';
         network_predict(net, X);
         printf("%s: Predicted in %f seconds.\n", input, sec(clock()-time));
         get_region_boxes(l, 1, 1, thresh, probs, boxes, 0, 0);
         if (nms) do_nms_sort(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-        draw_detections(im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes);
-        save_image(im, "predictions");
+        draw_detections_and_save_out(im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes, output);
+		
+        //save_image(im, "predictions");
         show_image(im, "predictions");
 
         free_image(im);
@@ -506,8 +540,8 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         free(boxes);
         free_ptrs((void **)probs, l.w*l.h*l.n);
 #ifdef OPENCV
-        cvWaitKey(0);
-        cvDestroyAllWindows();
+        cvWaitKey(1);
+        //cvDestroyAllWindows();
 #endif
         if (filename) break;
     }
