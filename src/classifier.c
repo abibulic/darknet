@@ -499,8 +499,23 @@ void validate_classifier_single(char *datacfg, char *filename, char *weightfile)
     for(i = 0; i < m; ++i){
         int class = -1;
         char *path = paths[i];
+		char *ssc;
+		char *a = path;
+		int l = 0;
+		ssc = strstr(a, "\\");
+		do {
+			l = strlen(ssc) + 1;
+			a = &a[strlen(a) - l + 2];
+			ssc = strstr(a, "\\");
+		} while (ssc);
+		ssc = strstr(a, "_");
+		do {
+			l = strlen(ssc) + 1;
+			a = &a[strlen(a) - l + 2];
+			ssc = strstr(a, "_");
+		} while (ssc);
         for(j = 0; j < classes; ++j){
-            if(strstr(path, labels[j])){
+            if(strstr(a, labels[j]) && (strlen(a) - 4 == strlen(labels[j]))){
                 class = j;
                 break;
             }
@@ -508,7 +523,7 @@ void validate_classifier_single(char *datacfg, char *filename, char *weightfile)
         image im = load_image_color(paths[i], 0, 0);
         image resized = resize_min(im, net.w);
         image crop = crop_image(resized, (resized.w - net.w)/2, (resized.h - net.h)/2, net.w, net.h);
-        //show_image(im, "orig");
+	//show_image(im, "orig");
         //show_image(crop, "cropped");
         //cvWaitKey(0);
         float *pred = network_predict(net, crop.data);
