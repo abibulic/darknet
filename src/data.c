@@ -390,10 +390,25 @@ data load_data_captcha_encode(char **paths, int n, int m, int w, int h)
 void fill_truth(char *path, char **labels, int k, float *truth)
 {
     int i;
+	char *ssc;
+	char *a = path;
+	int l = 0;
+	ssc = strstr(a, "\\");
+	do {
+		l = strlen(ssc) + 1;
+		a = &a[strlen(a) - l + 2];
+		ssc = strstr(a, "\\");
+	} while (ssc);
+	ssc = strstr(a, "_");
+	do {
+		l = strlen(ssc) + 1;
+		a = &a[strlen(a) - l + 2];
+		ssc = strstr(a, "_");
+	} while (ssc);
     memset(truth, 0, k*sizeof(float));
     int count = 0;
     for(i = 0; i < k; ++i){
-        if(strstr(path, labels[i])){
+        if(strstr(a, labels[i]) && (strlen(a)-4 == strlen(labels[i]))){
             truth[i] = 1;
             ++count;
         }
